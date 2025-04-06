@@ -1,114 +1,139 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Lip Reading + Speech Recognition</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lip Movement and Speech Recognition</title>
   <style>
-    body {
-      background: #111;
-      color: #fff;
-      font-family: sans-serif;
-      text-align: center;
+    #videoElement {
+      width: 100%;
+      height: auto;
+      border: 2px solid black;
     }
-    video, canvas {
-      border: 2px solid #fff;
-      border-radius: 10px;
-      margin-top: 20px;
+    #canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: auto;
     }
-    #caption {
-      font-size: 24px;
+    #speechLog {
       margin-top: 20px;
-      color: #0f0;
+      font-family: monospace;
     }
   </style>
 </head>
 <body>
-  <h1>🧠 Lip Movement Detection + 🎤 Live Captioning</h1>
-  <video id="video" width="640" height="480" autoplay muted playsinline></video>
-  <canvas id="canvas" width="640" height="480"></canvas>
-  <div id="caption">[Speech]: ...</div>
 
-  <script type="module">
-    import * as faceLandmarksDetection from 'https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@1.0.3/dist/face-landmarks-detection.esm.js';
-    import '@tensorflow/tfjs-backend-webgl';
+<video id="videoElement" autoplay></video>
+<canvas id="canvas"></canvas>
+<div id="speechLog">
+  <h2>Speech Recognition Log:</h2>
+  <p id="speechText">Waiting for speech...</p>
+</div>
 
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const captionDiv = document.getElementById('caption');
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection"></script>
 
-    async function setupCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      video.srcObject = stream;
-      return new Promise(resolve => {
-        video.onloadedmetadata = () => resolve(video);
-      });
-    }
+<script>
+  // Get the video element and canvas
+  const videoElement = document.getElementById('videoElement');
+  const canvas = document.getElementById('canvas');
+  const context = canvas.getContext('2d');
+  const speechText = document.getElementById('speechText');
 
-    async function main() {
-      await setupCamera();
-      const model = await faceLandmarksDetection.load(
-        faceLandmarksDetection.SupportedPackages.mediapipeFacemesh
-      );
+  let stream;
+  let faceModel;
+  let speechRecognition;
+  let isTalking = false;
 
-      async function detect() {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const predictions = await model.estimateFaces({ input: video });
+  // Access webcam
+  async function startWebcam() {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: true
+    });
+    videoElement.srcObject = stream;
+    videoElement.onloadedmetadata = () => {
+      canvas.width = videoElement.videoWidth;
+      canvas.height = videoElement.videoHeight;
+    };
+  }
 
-        if (predictions.length > 0) {
-          for (const pred of predictions) {
-            const keypoints = pred.scaledMesh;
+  // Load TensorFlow.js face landmark model
+  async function loadFaceModel() {
+    faceModel = await faceLandmarksDetection.load(faceLandmarksDetection.SupportedPackages.mediapipeFacemesh);
+    detectFaceLandmarks();
+  }
 
-            const topLip = keypoints[13];
-            const bottomLip = keypoints[14];
-            const lipDistance = Math.abs(bottomLip[1] - topLip[1]);
+  // Detect face landmarks and lip frame
+  async function detectFaceLandmarks() {
+    const predictions = await faceModel.estimateFaces({
+      input: videoElement
+    });
 
-            keypoints.slice(48, 60).forEach(([x, y]) => {
-              ctx.beginPath();
-              ctx.arc(x, y, 2, 0, 2 * Math.PI);
-              ctx.fillStyle = 'cyan';
-              ctx.fill();
-            });
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (predictions.length > 0) {
+      // Extract lip landmarks (mouth points 61 to 80 in the model)
+      const mouth = predictions[0].annotations.mouth;
 
-            if (lipDistance > 10) {
-              ctx.fillStyle = 'lime';
-              ctx.font = '24px Arial';
-              ctx.fillText('Talking...', 50, 50);
-            }
-          }
-        }
-
-        requestAnimationFrame(detect);
+      // Draw the lip frame on the canvas
+      context.beginPath();
+      context.moveTo(mouth[0][0], mouth[0][1]);
+      for (let i = 1; i < mouth.length; i++) {
+        context.lineTo(mouth[i][0], mouth[i][1]);
       }
-
-      detect();
+      context.closePath();
+      context.lineWidth = 2;
+      context.strokeStyle = "green";
+      context.stroke();
     }
 
-    main();
+    // Recursively call detectFaceLandmarks for continuous detection
+    requestAnimationFrame(detectFaceLandmarks);
+  }
 
-    // Speech recognition
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-
-      recognition.onresult = (event) => {
-        const transcript = Array.from(event.results)
-          .map(result => result[0].transcript)
-          .join('');
-        captionDiv.textContent = `[Speech]: ${transcript}`;
-      };
-
-      recognition.onerror = (event) => {
-        console.error('Speech Recognition Error:', event.error);
-        captionDiv.textContent = `[Speech]: (error: ${event.error})`;
-      };
-
-      recognition.start();
-    } else {
-      captionDiv.textContent = "[Speech]: Web Speech API not supported!";
+  // Setup speech recognition using Web Speech API
+  function setupSpeechRecognition() {
+    if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
+      speechText.innerText = "Speech Recognition not supported.";
+      return;
     }
-  </script>
+
+    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onstart = () => {
+      speechText.innerText = "Listening for speech...";
+    };
+
+    recognition.onresult = (event) => {
+      const last = event.results.length - 1;
+      const transcript = event.results[last][0].transcript;
+      const isFinal = event.results[last].isFinal;
+
+      if (isFinal) {
+        speechText.innerText = `You said: "${transcript}"`;
+      }
+    };
+
+    recognition.onerror = (event) => {
+      speechText.innerText = `Error: ${event.error}`;
+    };
+
+    recognition.start();
+  }
+
+  // Initialize everything
+  async function initialize() {
+    await startWebcam();
+    await loadFaceModel();
+    setupSpeechRecognition();
+  }
+
+  // Start the process
+  initialize();
+</script>
+
 </body>
 </html>
