@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Lip Movement and Speech Recognition</title>
+  <title>Lip Movement Masking</title>
   <style>
     #videoElement {
       width: 100%;
@@ -65,7 +65,7 @@
     detectFaceLandmarks();
   }
 
-  // Detect face landmarks and lip frame
+  // Detect face landmarks and apply lip masking
   async function detectFaceLandmarks() {
     const predictions = await faceModel.estimateFaces({
       input: videoElement
@@ -76,20 +76,60 @@
       // Extract lip landmarks (mouth points 61 to 80 in the model)
       const mouth = predictions[0].annotations.mouth;
 
-      // Draw the lip frame on the canvas
-      context.beginPath();
-      context.moveTo(mouth[0][0], mouth[0][1]);
-      for (let i = 1; i < mouth.length; i++) {
-        context.lineTo(mouth[i][0], mouth[i][1]);
+      // Create a new imageData object to draw the mask
+      let imageData = context.createImageData(canvas.width, canvas.height);
+      let pixels = imageData.data;
+
+      // Mask everything except the lip region
+      for (let i = 0; i < pixels.length; i += 4) {
+        // Get the current pixel's position
+        const x = (i / 4) % canvas.width;
+        const y = Math.floor(i / 4 / canvas.width);
+
+        // Check if the pixel is inside the mouth region (using simple polygon check)
+        if (isInsideMouth(x, y, mouth)) {
+          // If inside the mouth, retain the original video pixel (copy from video)
+          const videoPixel = getVideoPixel(x, y);
+          pixels[i] = videoPixel.r;
+          pixels[i + 1] = videoPixel.g;
+          pixels[i + 2] = videoPixel.b;
+          pixels[i + 3] = 255; // Set alpha to fully visible
+        } else {
+          // Else make the pixel transparent
+          pixels[i + 3] = 0; // Transparent pixel
+        }
       }
-      context.closePath();
-      context.lineWidth = 2;
-      context.strokeStyle = "green";
-      context.stroke();
+
+      // Put the manipulated image data onto the canvas
+      context.putImageData(imageData, 0, 0);
     }
 
     // Recursively call detectFaceLandmarks for continuous detection
     requestAnimationFrame(detectFaceLandmarks);
+  }
+
+  // Check if a point is inside the mouth polygon (simple ray-casting method)
+  function isInsideMouth(x, y, mouthPoints) {
+    let inside = false;
+    for (let i = 0, j = mouthPoints.length - 1; i < mouthPoints.length; j = i++) {
+      const xi = mouthPoints[i][0], yi = mouthPoints[i][1];
+      const xj = mouthPoints[j][0], yj = mouthPoints[j][1];
+
+      const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  // Get the corresponding pixel from the video stream
+  function getVideoPixel(x, y) {
+    const videoFrame = context.getImageData(x, y, 1, 1);
+    const pixel = videoFrame.data;
+    return {
+      r: pixel[0],
+      g: pixel[1],
+      b: pixel[2]
+    };
   }
 
   // Setup speech recognition using Web Speech API
